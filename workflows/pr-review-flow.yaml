@@ -1,0 +1,132 @@
+name: pr-review-flow
+description: "Full PR intelligence pipeline — reviews a change, explains its architectural impact, flags documentation gaps, and optionally generates an ADR if the change encodes a significant decision."
+version: 1.0.0
+
+triggers:
+  - pull_request
+  - manual
+
+inputs:
+  diff:
+    description: "The PR diff or list of changed files"
+    required: true
+  pr_title:
+    description: "The pull request title"
+    required: false
+  pr_description:
+    description: "The pull request description"
+    required: false
+  write_adr:
+    description: "Whether to generate an ADR if a significant architectural decision is detected"
+    required: false
+    default: "auto"
+
+steps:
+
+  # ── Step 1: Understand the change ─────────────────────────────────────────
+  orient:
+    skill: arch-explainer
+    prompt: |
+      You are the first step in a PR review pipeline. Do not write a full review yet.
+      Your job is to orient the pipeline to this change.
+
+      Given the diff provided, answer these questions in structured JSON:
+      1. What modules/layers does this change touch?
+      2. Does it cross architectural boundaries (e.g. touches both data layer and presentation)?
+      3. Does it appear to encode a new architectural decision (new pattern, new dependency, new abstraction)?
+      4. What is the apparent intent of this change in one sentence?
+      5. What are the 2–3 most important files to understand this change?
+
+      Respond ONLY with a JSON object. No prose.
+    inputs:
+      diff: ${{ inputs.diff }}
+      pr_title: ${{ inputs.pr_title }}
+      pr_description: ${{ inputs.pr_description }}
+    outputs:
+      orientation: ${{ steps.orient.result }}
+
+  # ── Step 2: Code review against conventions ───────────────────────────────
+  review:
+    skill: pr-reviewer
+    depends_on: [orient]
+    prompt: |
+      Perform a full PR review of this change.
+
+      Context from architectural analysis:
+      - Modules touched: ${{ steps.orient.outputs.orientation.modules_touched }}
+      - Crosses architectural boundaries: ${{ steps.orient.outputs.orientation.crosses_boundaries }}
+      - Apparent intent: ${{ steps.orient.outputs.orientation.intent }}
+      - Key files: ${{ steps.orient.outputs.orientation.key_files }}
+
+      Pay particular attention to the modules identified above.
+      Format your review as specified in your skill instructions.
+    inputs:
+      diff: ${{ inputs.diff }}
+    outputs:
+      review_verdict: ${{ steps.review.result }}
+
+  # ── Step 3: Architectural impact explanation ──────────────────────────────
+  arch_impact:
+    skill: arch-explainer
+    depends_on: [orient, review]
+    prompt: |
+      This change has been reviewed. Now explain its architectural impact.
+
+      Orientation data: ${{ steps.orient.outputs.orientation }}
+      Review findings: ${{ steps.review.outputs.review_verdict }}
+
+      Answer:
+      1. How does this change affect the existing architecture?
+      2. Does it improve, degrade, or laterally shift the design?
+      3. What parts of the codebase are now coupled to this change that weren't before?
+      4. Are there downstream files that should be updated but aren't in this diff?
+
+      Be specific. Cite files.
+    inputs:
+      diff: ${{ inputs.diff }}
+    outputs:
+      arch_analysis: ${{ steps.arch_impact.result }}
+
+  # ── Step 4: ADR generation (conditional) ─────────────────────────────────
+  adr:
+    skill: adr-writer
+    depends_on: [orient, arch_impact]
+    conditions:
+      - ${{ inputs.write_adr == "yes" || (inputs.write_adr == "auto" && steps.orient.outputs.orientation.new_architectural_decision == true) }}
+    prompt: |
+      This PR encodes a significant architectural decision.
+
+      Orientation: ${{ steps.orient.outputs.orientation }}
+      Architectural analysis: ${{ steps.arch_impact.outputs.arch_analysis }}
+      PR title: ${{ inputs.pr_title }}
+
+      Write a retrospective ADR for the decision embedded in this change.
+      Mark inferred content clearly.
+    inputs:
+      diff: ${{ inputs.diff }}
+    outputs:
+      adr_draft: ${{ steps.adr.result }}
+
+  # ── Step 5: Final summary ─────────────────────────────────────────────────
+  summary:
+    skill: arch-explainer
+    depends_on: [review, arch_impact, adr]
+    prompt: |
+      Synthesise the full pipeline output into a concise PR summary for the author.
+
+      Review: ${{ steps.review.outputs.review_verdict }}
+      Architectural impact: ${{ steps.arch_impact.outputs.arch_analysis }}
+      ADR generated: ${{ steps.adr.outputs.adr_draft != null }}
+
+      Write a 3-section summary:
+      1. **Verdict** — APPROVE / REQUEST CHANGES / NEEDS DISCUSSION, with one sentence of reasoning
+      2. **Top 3 actions** — the three most important things the author should do, ranked by priority
+      3. **Architectural note** — one paragraph on how this change fits (or doesn't) into the system's direction
+
+      Be direct. This is what the author reads first.
+    outputs:
+      final_summary: ${{ steps.summary.result }}
+
+error_handling:
+  on_failure: continue
+  notify: false

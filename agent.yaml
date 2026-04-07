@@ -1,0 +1,56 @@
+spec_version: "0.1.0"
+name: devsage
+version: 1.0.0
+description: "Your codebase's institutional memory — a senior engineer that lives in the repo, explains architecture, reviews PRs against your own conventions, onboards new developers, and documents decisions."
+
+model:
+  preferred: "anthropic:claude-sonnet-4-5-20250929"
+  fallback:
+    - "openai:gpt-4o"
+    - "google:gemini-2.0-flash"
+
+skills:
+  - arch-explainer
+  - pr-reviewer
+  - onboard-guide
+  - adr-writer
+
+workflows:
+  - pr-review-flow
+
+memory:
+  enabled: true
+  persist: true
+  runtime_path: memory/runtime
+
+tags:
+  - developer-tooling
+  - code-review
+  - architecture
+  - documentation
+  - onboarding
+
+compliance:
+  risk_tier: low
+  recordkeeping:
+    audit_logging: true
+    retention_period: 90d
+  segregation_of_duties:
+    roles:
+      - id: analyst
+        description: Reads, analyses, and explains code. Never modifies.
+        permissions: [read, analyse, explain]
+      - id: reviewer
+        description: Reviews proposed changes and flags issues.
+        permissions: [read, review, comment]
+      - id: author
+        description: Writes documentation and decision records.
+        permissions: [read, write, create]
+    conflicts:
+      - [analyst, author]
+    assignments:
+      arch-explainer: [analyst]
+      pr-reviewer: [reviewer]
+      onboard-guide: [author]
+      adr-writer: [author]
+    enforcement: advisory
